@@ -99,6 +99,6 @@ ENV/
 
 # mypy
 .mypy_cache/
-wiki
+wiki_data/*
 *.json
 *.ipynb
