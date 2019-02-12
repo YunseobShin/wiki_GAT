@@ -5,18 +5,18 @@ import tensorflow as tf
 from models import GAT
 from utils import process
 
-checkpt_file = 'pre_trained/cora/mod_cora.ckpt'
+checkpt_file = 'pre_trained/wiki/mod_wiki.ckpt'
 
-dataset = 'cora'
+dataset = 'wiki'
 
 # training params
-batch_size = 1
+batch_size = 4
 nb_epochs = 100000
 patience = 100
 lr = 0.005  # learning rate
 l2_coef = 0.0005  # weight decay
-hid_units = [8] # numbers of hidden units per each attention head in each layer
-n_heads = [8, 1] # additional entry for the output layer
+hid_units = [24] # numbers of hidden units per each attention head in each layer
+n_heads = [24, 1] # additional entry for the output layer
 residual = False
 nonlinearity = tf.nn.elu
 model = GAT

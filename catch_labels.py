@@ -4,13 +4,13 @@ import numpy as np
 import re, sys
 from tqdm import tqdm
 
-f = open('wiki_dic.json').read()
+f = open('wiki_data/wiki_dic.json').read()
 wiki_dic = json.loads(f)
-f = open('title_index.json').read()
+f = open('wiki_data/title_index.json').read()
 t_i = json.loads(f)
-f = open('index_title.json').read()
+f = open('wiki_data/index_title.json').read()
 i_t = json.loads(f)
-sample_nodes = np.load('wiki_30k.npy')
+sample_nodes = np.load('wiki_data/wiki_30k.npy')
 
 label_pattern = re.compile('\[\[Category:(.*?)\]\]')
 t_l = {}
@@ -67,8 +67,8 @@ for node in tqdm(sample_nodes):
                 t_l[title] = label
                 break
 
-print(len(t_l))
-fname = 'title_labels.json'
+print('number of labeled data:', len(t_l))
+fname = 'wiki_data/title_labels_30k.json'
 with open(fname, 'w') as g:
     json.dump(t_l, g)
 
