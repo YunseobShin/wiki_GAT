@@ -102,3 +102,4 @@ ENV/
 wiki_data/*
 *.json
 *.ipynb
+*.txt
