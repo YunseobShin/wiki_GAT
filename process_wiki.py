@@ -1,6 +1,7 @@
 from sklearn.feature_extraction.text import CountVectorizer
-import json, networkx as nx
+import json, networkx as nx, sys
 from tqdm import tqdm
+from gensim.models import KeyedVectors as KV
 import scipy as sp, numpy as np
 import pickle as pkl
 from sklearn.decomposition import TruncatedSVD
@@ -17,6 +18,55 @@ def make_one_hot(label_dic):
 
     return l_one
 
+def load_features(data, label_dic, label_onehot, alpha):
+    eval_set_num = '05'
+    infile = 'wiki_data/updated_embedding_alpha_'
+    if alpha <= 1:
+        embeddings = KV.load_word2vec_format(infile + str(alpha)+'_'+eval_set_num, binary=True)
+    else:
+        em1 = KV.load_word2vec_format(infile + str(0.0)+'_'+eval_set_num, binary=True)
+        em2 = KV.load_word2vec_format(infile + str(1.0)+'_'+eval_set_num, binary=True)
+        embeddings = KV(vector_size = em1.vector_size*2)
+        for t in tqdm(list(em1.vocab)):
+            embeddings[t] = np.hstack((em1[t], em2[t]))
+
+    ally_ty = []
+    allx_tx = []
+    allx_tx_dic = {}
+    i = 0
+    tmp_dic = {}
+    print('appending training data...')
+    dummy_dim = 800
+    for k in tqdm(data):
+        if k not in label_dic:
+            continue
+        tmp_vec = np.zeros(dummy_dim)
+        tmp_vec[:embeddings.vector_size] = embeddings[k]
+        allx_tx.append(tmp_vec)
+        allx_tx_dic[k] = 0
+        tmp_dic[k] = i
+        one_hot = label_onehot[label_dic[k]]
+        ally_ty.append(one_hot)
+        i += 1
+
+    nb_trains = i-1
+    print('appending unlabeled data...')
+    for k in tqdm(data):
+        if k in label_dic:
+            continue
+        tmp_vec = np.zeros(dummy_dim)
+        tmp_vec[:embeddings.vector_size] = embeddings[k]
+        allx_tx.append(tmp_vec)
+        allx_tx_dic[k] = 0
+        tmp_dic[k] = i
+        ally_ty.append(np.zeros(len(ally_ty[0])))
+        i += 1
+
+    for k in allx_tx_dic:
+        allx_tx_dic[k] = allx_tx[tmp_dic[k]]
+
+    return sp.sparse.csr_matrix(allx_tx), np.array(ally_ty), allx_tx_dic, nb_trains
+
 def make_BOW(data, label_dic, label_onehot):
     vectorizer = CountVectorizer()
     print('constructing bag of words...')
@@ -26,126 +76,180 @@ def make_BOW(data, label_dic, label_onehot):
     allx_tx_dic = {}
     i = 0
     tmp_dic = {}
+    print('appending training data...')
+    for k in tqdm(data):
+        if k not in label_dic:
+            continue
+        tmp_vec = vectorizer.transform([data[k]]).toarray()
+        allx_tx.append(tmp_vec)
+        allx_tx_dic[k] = 0
+        tmp_dic[k] = i
+        one_hot = label_onehot[label_dic[k]]
+        ally_ty.append(one_hot)
+        i += 1
+
+    nb_trains = i-1
+    print('appending unlabeled data...')
     for k in tqdm(data):
         if k in label_dic:
-            tmp_vec = vectorizer.transform([data[k]]).toarray()
-            allx_tx.append(tmp_vec)
-            allx_tx_dic[k] = 0
-            tmp_dic[k] = i
-            one_hot = label_onehot[label_dic[k]]
-            ally_ty.append(one_hot)
-            i += 1
+            continue
+        tmp_vec = vectorizer.transform([data[k]]).toarray()
+        allx_tx.append(tmp_vec)
+        allx_tx_dic[k] = 0
+        tmp_dic[k] = i
+        ally_ty.append(np.zeros(len(ally_ty[0])))
+        i += 1
 
     print('Reducing dimensionality with Truncated SVD...')
     tic()
     allx_tx = sp.sparse.csr_matrix(np.matrix(np.array(allx_tx)))
-    allx_tx = svd(allx_tx)
+    allx_tx = svd(allx_tx, dim=2000, n_iter=1)
     toc()
     for k in allx_tx_dic:
         allx_tx_dic[k] = allx_tx[tmp_dic[k]]
 
-    return sp.sparse.csr_matrix(allx_tx), np.array(ally_ty), allx_tx_dic
+    return sp.sparse.csr_matrix(allx_tx), np.array(ally_ty), allx_tx_dic, nb_trains
 
-def split_train_test(label_dic, allx_tx_dic, train_ratio, ti, label_onehot):
-    common_idx = np.load('wiki_data/cm_idx.npy')
+def split_train_test(allx_tx, ally_ty, label_dic, allx_tx_dic, nb_trainables, train_ratio, ti, label_onehot, edgefile):
     data = []
-    for t in label_dic:
-        if t not in common_idx:
+    for t in allx_tx_dic:
+        if t in label_dic:
+            data.append([allx_tx_dic[t], label_dic[t], t])
+        else:
+            data.append([allx_tx_dic[t], '_', t])
+
+    new_ti = map_t_i(data, ti)
+    tmp_graph = nx.to_dict_of_lists(get_CC(make_graph(edgefile, new_ti)))
+    connected_nodes = list(tmp_graph.keys())
+
+    data = []
+    for t in allx_tx_dic:
+        if ti[t] not in connected_nodes:
             continue
-        data.append([allx_tx_dic[t], label_dic[t], t])
+        if t in label_dic:
+            data.append([allx_tx_dic[t], label_dic[t], t])
+        else:
+            data.append([allx_tx_dic[t], '_', t])
+
     data = np.array(data)
     np.random.shuffle(data)
     new_ti = map_t_i(data, ti)
 
-    train = []
-    test = []
     test_array = []
-    train_chunk = data[:int(len(data)*train_ratio)]
-    test_chunk = data[int(len(data)*train_ratio):]
-    test_index = range(int(len(data)*train_ratio), len(data))
+    labeled = np.where(data[:,1] != '_')[0]
+    train_index = labeled[:int(len(labeled)*train_ratio)]
+    test_index = labeled[int(len(labeled)*train_ratio):]
 
-    train_x = []
-    test_x = []
-    train_y = []
-    test_y = []
+    train_x = [np.array(x).reshape(len(x)) for x in data[train_index][:, 0]]
+    train_x = np.array(train_x)
+    train_x = train_x.reshape(train_x.shape)
+    train_x = sp.sparse.csr_matrix(np.matrix(train_x))
 
-    for tr in train_chunk:
-        train_x.append(list(tr[0]))
-        train_y.append(label_onehot[tr[1]])
-    for ts in test_chunk:
-        test_x.append(list(ts[0]))
-        test_y.append(label_onehot[ts[1]])
-
-    train_x = np.matrix(np.array(train_x))
-    test_x = np.matrix(np.array(test_x))
+    train_y = [label_onehot[x] for x in data[train_index][:, 1]]
     train_y = np.array(train_y)
+
+    new_allx = [np.array(x).reshape(len(x)) for x in data[:, 0]]
+    new_allx = np.array(new_allx)
+    new_allx = new_allx.reshape(new_allx.shape)
+    new_allx = sp.sparse.csr_matrix(np.matrix(new_allx))
+
+    new_ally = []
+    for k in data:
+        if k[1] == '_':
+            new_ally.append(np.zeros(train_y.shape[1]))
+        else:
+            new_ally.append(label_onehot[k[1]])
+
+    new_ally = np.array(new_ally)
+    test_x = [np.array(x).reshape(len(x)) for x in data[test_index][:, 0]]
+    test_x = np.array(test_x)
+    test_x = test_x.reshape(test_x.shape)
+    test_x = sp.sparse.csr_matrix(np.matrix(test_x))
+
+    test_y = [label_onehot[x] for x in data[test_index][:, 1]]
     test_y = np.array(test_y)
+
     test_index = [str(x) for x in test_index]
     test_index  = ('\n').join(test_index)
+    train_index = [str(x) for x in train_index]
+    train_index  = ('\n').join(train_index)
 
-    return sp.sparse.csr_matrix(train_x), train_y, sp.sparse.csr_matrix(test_x), test_y, test_index, new_ti
-
+    return new_allx, new_ally, train_x, train_y, test_x, test_y, test_index, train_index, new_ti
 
 def map_t_i(data, old_ti):
     new_ti = {}
     for i in range(len(data)):
-        new_ti[ old_ti[ data[i][2] ] ] = str(i)
+        new_ti[ old_ti[ data[i][2] ] ] = i
 
     return new_ti
 
 def make_graph(edgefile, new_ti):
-    new_graph = nx.DiGraph()
-    g = nx.read_edgelist(edgefile, create_using=nx.DiGraph())
-    common_idx = np.load('wiki_data/cm_idx.npy')
-    for e in tqdm(list(g.edges())):
-        if e[0] not in new_ti or e[1] not in new_ti:
-            continue
-        new_graph.add_edge(new_ti[e[0]], new_ti[e[1]])
-    return nx.to_dict_of_lists(new_graph)
+    g = nx.read_edgelist(edgefile, create_using=nx.Graph())
+    x_nodes = [str(x) for x in list(new_ti.keys())]
+    new_graph = g.subgraph(x_nodes)
+    return new_graph
 
-def svd(feature):
-    svd = TruncatedSVD(n_components=2048, n_iter=1, random_state=42)
+def construct_graph(edgefile, new_ti):
+    g = nx.read_edgelist(edgefile, create_using=nx.Graph())
+    keys = list(new_ti.keys())
+    edges = list(g.edges())
+    adj = np.zeros((len(new_ti), len(new_ti)))
+    for e in tqdm(edges):
+        if e[0] in keys and e[1] in keys:
+            adj[int(new_ti[e[0]])][int(new_ti[e[1]])] = 1
+
+    adj = np.matrix(adj)
+    new_g = nx.Graph(nx.from_numpy_matrix(adj))
+    return nx.to_dict_of_lists(new_g)
+
+def svd(feature, dim=3000, n_iter=2):
+    svd = TruncatedSVD(n_components=dim, n_iter=n_iter, random_state=42)
     return svd.fit_transform(feature)
 
+def get_CC(graph):
+    return graph.subgraph(max(nx.connected_components(graph)))
+
 def main():
+    sample_size = '5'
+    alpha = float(sys.argv[2])
     ti_file = 'wiki_data/title_index.json'
     with open(ti_file, 'r', encoding='UTF8') as f:
         ti = json.loads(f.read())
 
-    json_file = 'wiki_data/wiki_30k.json'
+    json_file = 'wiki_data/wiki_'+sample_size+'k.json'
     with open(json_file, 'r', encoding='UTF8') as f:
         wiki = json.loads(f.read())
 
-    label_file = 'wiki_data/title_labels_30k.json'
+    label_file = 'wiki_data/title_labels_'+sample_size+'k.json'
     with open(label_file, 'r') as g:
         label_dic = json.loads(g.read())
         print('number of labels:', len(set(label_dic.values())))
 
-    nodes = np.load('wiki_data/wiki_node_30k.npy')
-    edgefile = 'wiki_data/edges_30k.txt'
-
-
+    nodes = np.load('wiki_data/wiki_node_'+sample_size+'k.npy')
+    edgefile = 'wiki_data/edges_'+sample_size+'k.txt'
+    cm_idx = np.load('wiki_data/cm_idx_05.npy')
     data = {}
-    common_idx = np.load('wiki_data/cm_idx.npy')
     for title in wiki:
-        if title in label_dic and title in common_idx:
-            data[title] = wiki[title]
+        if title not in cm_idx:
+            continue
+        data[title] = wiki[title]
 
     label_onehot = make_one_hot(label_dic)
-    
-    allx_tx, ally_ty, allx_tx__dic = make_BOW(data, label_dic, label_onehot)
 
-    train_ratio = 0.8
-    print('spliting train / test')
-    x, y, tx, ty, test_index, new_ti = split_train_test(label_dic, allx_tx__dic, train_ratio, ti, label_onehot)
+    # allx_tx, ally_ty, allx_tx_dic, nb_trainables = make_BOW(data, label_dic, label_onehot)
+    allx_tx, ally_ty, allx_tx_dic, nb_trainables = load_features(data, label_dic, label_onehot, alpha)
+    print('number of trainables:', nb_trainables)
+    train_ratio = float(sys.argv[1])
+    print('spliting train and test....')
+    allx, ally, x, y, tx, ty, test_index, train_index, new_ti = split_train_test(allx_tx, ally_ty, label_dic, allx_tx_dic, nb_trainables, train_ratio, ti, label_onehot, edgefile)
+
     print('making graph dictionary...')
-    graph = make_graph(edgefile, new_ti)
-
+    graph = construct_graph(edgefile, new_ti)
 
     with open('wiki_data/ind.wiki.allx', 'wb') as f:
-        pkl.dump(x, f)
+        pkl.dump(allx, f)
     with open('wiki_data/ind.wiki.ally', 'wb') as f:
-        pkl.dump(y, f)
+        pkl.dump(ally, f)
     with open('wiki_data/ind.wiki.x', 'wb') as f:
         pkl.dump(x, f)
     with open('wiki_data/ind.wiki.y', 'wb') as f:
@@ -158,10 +262,8 @@ def main():
         pkl.dump(graph, f)
     with open('wiki_data/ind.wiki.test.index', 'w') as f:
         f.write(test_index)
-
-
-
-
+    with open('wiki_data/ind.wiki.train.index', 'w') as f:
+        f.write(train_index)
 
 if __name__ == '__main__':
     main()

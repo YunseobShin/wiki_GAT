@@ -36,7 +36,6 @@ class BaseGAttN:
 ##########################
 # Adapted from tkipf/gcn #
 ##########################
-
     def masked_softmax_cross_entropy(logits, labels, mask):
         """Softmax cross-entropy loss with masking."""
         loss = tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels)

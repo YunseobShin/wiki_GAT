@@ -1,31 +1,19 @@
 import numpy as np
-import sys
+import networkx as nx
 from tqdm import tqdm
-from time_check import tic
-from time_check import toc
-import multiprocessing
-from multiprocessing import Pool
 
-def write_sample(E):
-    output = open('edges_30k.txt', 'a')
-    sample_nodes = np.load('wiki_data/wiki_node_30k.npy')
-    s=int(E[0])
-    t=int(E[1])
-    # print(s, t)
-    if s in sample_nodes and t in sample_nodes:
-        output.write(str(s)+' '+str(t)+'\n')
-    output.close()
+g = nx.read_edgelist('wiki_data/edges.txt', create_using=nx.Graph())
+sample_nodes = np.load('wiki_data/wiki_node_5k.npy')
+sample_graph = g.subgraph(sample_nodes)
 
+edges = list(sample_graph.edges())
+output = open('wiki_data/edges_5k.txt', 'w')
+for e in tqdm(edges):
+    e = str(e)
+    e = e.replace('(', '')
+    e = e.replace(')', '')
+    e = e.replace("'", "")
+    e = e.replace(',', '')
+    output.write(e+'\n')
 
-with open('wiki_data/edges.txt', 'r') as f:
-    edges = f.readlines()
-
-edges = [x.split(' ') for x in tqdm(edges)]
-# print(edges[:20])
-pool_size = 26
-output = open('edges_30k.txt', 'w')
 output.close()
-pool = Pool(processes = pool_size)
-tic()
-pool.map(write_sample, edges)
-toc()

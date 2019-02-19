@@ -2,26 +2,30 @@ import time
 import scipy.sparse as sp
 import numpy as np
 import tensorflow as tf
-import argparse
+import argparse, sys
 
 from models import GAT
 from models import SpGAT
 from utils import process
 
+tf_config = tf.ConfigProto()
+tf_config.gpu_options.allow_growth = True
+
 checkpt_file = 'pre_trained/wiki/mod_wiki.ckpt'
 
-dataset = 'wiki'
+dataset = sys.argv[1]
 
 # training params
 batch_size = 1
-nb_epochs = 100000
+nb_epochs = 5000
 patience = 100
 lr = 0.005  # learning rate
 l2_coef = 0.0005  # weight decay
-hid_units = [8] # numbers of hidden units per each attention head in each layer
+hid_units = [150] # numbers of hidden units per each attention head in each layer
 n_heads = [8, 1] # additional entry for the output layer
 residual = False
 nonlinearity = tf.nn.elu
+dropout = 0.6
 # model = GAT
 model = SpGAT
 
@@ -98,7 +102,7 @@ with tf.Graph().as_default():
     vacc_mx = 0.0
     curr_step = 0
 
-    with tf.Session() as sess:
+    with tf.Session(config=tf_config) as sess:
         sess.run(init_op)
 
         train_loss_avg = 0
@@ -123,14 +127,13 @@ with tf.Graph().as_default():
                         lbl_in: y_train[tr_step*batch_size:(tr_step+1)*batch_size],
                         msk_in: train_mask[tr_step*batch_size:(tr_step+1)*batch_size],
                         is_train: True,
-                        attn_drop: 0.6, ffd_drop: 0.6})
+                        attn_drop: dropout, ffd_drop: dropout})
                 train_loss_avg += loss_value_tr
                 train_acc_avg += acc_tr
                 tr_step += 1
 
             vl_step = 0
             vl_size = features.shape[0]
-
             while vl_step * batch_size < vl_size:
                 if sparse:
                     bbias = biases
@@ -148,9 +151,10 @@ with tf.Graph().as_default():
                 val_acc_avg += acc_vl
                 vl_step += 1
 
-            print('Training: loss = %.5f, acc = %.5f | Val: loss = %.5f, acc = %.5f' %
-                    (train_loss_avg/tr_step, train_acc_avg/tr_step,
-                    val_loss_avg/vl_step, val_acc_avg/vl_step))
+            if int(epoch/10)==0:
+                print('Training: loss = %.5f, acc = %.5f | Val: loss = %.5f, acc = %.5f' %
+                        (train_loss_avg/tr_step, train_acc_avg/tr_step,
+                        val_loss_avg/vl_step, val_acc_avg/vl_step))
 
             if val_acc_avg/vl_step >= vacc_mx or val_loss_avg/vl_step <= vlss_mn:
                 if val_acc_avg/vl_step >= vacc_mx and val_loss_avg/vl_step <= vlss_mn:
